@@ -9,3 +9,4 @@ node_modules/
 .vscode/
 *.sqlite3
 .DS_Store
+/VIKMO DealerDesk Assignment/
