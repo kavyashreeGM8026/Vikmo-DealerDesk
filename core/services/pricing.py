@@ -9,7 +9,7 @@ sneak into a calculation.
     subtotal / tax_total / grand_total are the sums of the lines (tax is not re-rounded).
 """
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, localcontext
+from decimal import ROUND_HALF_UP, Decimal, localcontext   
 
 TAX_RATE = Decimal("0.18")
 PAISE = Decimal("0.01")

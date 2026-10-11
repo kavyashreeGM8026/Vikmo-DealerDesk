@@ -219,3 +219,4 @@ class OrderOutputSerializer(serializers.Serializer):
     grand_total = MoneyField(max_digits=16)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+

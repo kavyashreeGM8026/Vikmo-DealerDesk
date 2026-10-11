@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 
 from core.services.pricing import price_line, price_order
 
-D = Decimal
+D = Decimal   
 
 
 class PriceLineTests(SimpleTestCase):

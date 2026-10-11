@@ -6,7 +6,7 @@ How uniqueness is guaranteed (PostgreSQL, no Python-level locks):
 * Allocation is ONE atomic statement: INSERT ... ON CONFLICT (day) DO UPDATE SET
   last_value = last_value + 1 RETURNING last_value.
   Concurrent callers queue on that row's lock, so every caller gets a different value, in any
-  process.
+  process. 
 * The row lock is held until the surrounding transaction ends. Call this inside the same
   `transaction.atomic()` that inserts the order, as the last step before the insert: if the
   order insert fails, the counter increment rolls back too, so numbers have no gaps, and the

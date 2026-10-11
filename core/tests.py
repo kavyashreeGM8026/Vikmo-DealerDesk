@@ -638,6 +638,7 @@ class DealerApiTests(APITestCase):
 class DealerSeedTests(APITestCase):
     """seed_data now loads data/dealers.csv as well as data/catalogue.csv."""
 
+h
     @staticmethod
     def csv_rows():
         with (settings.DATA_DIR / "dealers.csv").open(encoding="utf-8-sig", newline="") as fh:
