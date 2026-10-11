@@ -148,3 +148,74 @@ class DealerSerializer(serializers.ModelSerializer):
         if "credit_limit" in attrs and attrs["credit_limit"] is None:
             del attrs["credit_limit"]  # fall back to the model default (0.00)
         return attrs
+
+
+# ---- Orders (contract section 7) ---------------------------------------------------------
+
+MAX_QUANTITY = 2_147_483_647  # largest value the integer column can hold
+MAX_ID = 2**63 - 1  # largest value the bigint id column can hold
+
+
+class OrderItemInputSerializer(serializers.Serializer):
+    sku = serializers.CharField()
+    quantity = StrictIntegerField(min_value=1, max_value=MAX_QUANTITY)
+
+
+class OrderCreateSerializer(serializers.Serializer):
+    """POST /api/orders/ body. Validation only reads the database; nothing is written.
+
+    On success `validated_data` is {"dealer": Dealer, "lines": [(Product, quantity), ...]}.
+    """
+
+    dealer_id = StrictIntegerField(min_value=1, max_value=MAX_ID)
+    items = OrderItemInputSerializer(many=True, allow_empty=False)
+
+    def validate(self, attrs):
+        errors = {}
+
+        skus = [item["sku"] for item in attrs["items"]]
+        duplicates = sorted({sku for sku in skus if skus.count(sku) > 1})
+        item_messages = []
+        if duplicates:
+            item_messages.append(f"Duplicate SKU in order: {', '.join(duplicates)}.")
+
+        products = Product.objects.in_bulk(set(skus))
+        unknown = sorted({sku for sku in skus if sku not in products})
+        if unknown:
+            item_messages.append(f"Unknown SKU: {', '.join(unknown)}.")
+        if item_messages:
+            errors["items"] = item_messages
+
+        dealer = Dealer.objects.filter(pk=attrs["dealer_id"]).first()
+        if dealer is None:
+            errors["dealer_id"] = [f"Dealer {attrs['dealer_id']} does not exist."]
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        lines = [(products[item["sku"]], item["quantity"]) for item in attrs["items"]]
+        return {"dealer": dealer, "lines": lines}
+
+
+class OrderItemOutputSerializer(serializers.Serializer):
+    sku = serializers.CharField()
+    name = serializers.CharField()
+    quantity = serializers.IntegerField()
+    unit_price = MoneyField(max_digits=16)
+    line_subtotal = MoneyField(max_digits=16)
+    line_tax = MoneyField(max_digits=16)
+    line_total = MoneyField(max_digits=16)
+
+
+class OrderOutputSerializer(serializers.Serializer):
+    """Formats the dict built by core.services.orders.present_order."""
+
+    order_number = serializers.CharField()
+    dealer_id = serializers.IntegerField()
+    status = serializers.CharField()
+    items = OrderItemOutputSerializer(many=True)
+    subtotal = MoneyField(max_digits=16)
+    tax_total = MoneyField(max_digits=16)
+    grand_total = MoneyField(max_digits=16)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()

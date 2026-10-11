@@ -5,15 +5,19 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.exceptions import DuplicateError, NotFoundError
-from core.models import Dealer, Product
+from common.exceptions import APIError, DuplicateError, NotFoundError
+from core.models import Dealer, Order, Product
 from core.serializers import (
+    MAX_ID,
     DealerSerializer,
     InventoryUpdateSerializer,
+    OrderCreateSerializer,
+    OrderOutputSerializer,
     ProductCreateSerializer,
     ProductSerializer,
     ProductUpdateSerializer,
 )
+from core.services.orders import create_draft_order, get_order, order_queryset, present_order
 
 
 def health(request):
@@ -92,14 +96,18 @@ class InventoryUpdateView(APIView):
     """PUT /api/inventory/{sku}/ — set available quantity exactly (contract §5)."""
 
     def put(self, request, sku):
-        try:
-            product = Product.objects.get(pk=sku)
-        except Product.DoesNotExist:
-            raise NotFoundError(f"Product '{sku}' not found.")
-        serializer = InventoryUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        product.stock = serializer.validated_data["quantity"]
-        product.save(update_fields=["stock"])
+        # The row is locked (SELECT ... FOR UPDATE) until the transaction ends, so a manual
+        # stock update can never interleave with an order confirmation touching the same
+        # product. Behaviour and response are unchanged: 404 first, then 400, then 200.
+        with transaction.atomic():
+            try:
+                product = Product.objects.select_for_update().get(pk=sku)
+            except Product.DoesNotExist:
+                raise NotFoundError(f"Product '{sku}' not found.")
+            serializer = InventoryUpdateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            product.stock = serializer.validated_data["quantity"]
+            product.save(update_fields=["stock"])
         return Response({"sku": product.sku, "quantity": product.stock})
 
 
@@ -140,3 +148,50 @@ class DealerDetailView(generics.RetrieveAPIView):
             return Dealer.objects.get(pk=int(raw_id))
         except Dealer.DoesNotExist:
             raise NotFoundError(f"Dealer '{raw_id}' not found.")
+
+
+def _filter_error(field, message):
+    return APIError(message, [{"field": field, "message": message}])
+
+
+class OrderListCreateView(generics.GenericAPIView):
+    """POST /api/orders/ (create a DRAFT) and GET /api/orders/ (paginated, filterable)."""
+
+    def get_queryset(self):
+        qs = order_queryset()  # ordered newest first (Order.Meta.ordering), items prefetched
+        params = self.request.query_params
+
+        dealer_id = params.get("dealer_id")
+        if dealer_id:
+            if not (dealer_id.isascii() and dealer_id.isdigit()) or int(dealer_id) > MAX_ID:
+                raise _filter_error("dealer_id", "dealer_id must be a positive integer.")
+            qs = qs.filter(dealer_id=int(dealer_id))
+
+        status_filter = params.get("status")
+        if status_filter:
+            if status_filter not in Order.Status.values:
+                allowed = ", ".join(Order.Status.values)
+                raise _filter_error("status", f"status must be one of: {allowed}.")
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def get(self, request):
+        page = self.paginate_queryset(self.get_queryset())
+        data = OrderOutputSerializer([present_order(order) for order in page], many=True).data
+        return self.get_paginated_response(data)
+
+    def post(self, request):
+        serializer = OrderCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = create_draft_order(
+            serializer.validated_data["dealer"], serializer.validated_data["lines"]
+        )
+        return Response(OrderOutputSerializer(present_order(order)).data, status=status.HTTP_201_CREATED)
+
+
+class OrderDetailView(APIView):
+    """GET /api/orders/{order_number}/. (PUT arrives in Stage 2d-2.)"""
+
+    def get(self, request, order_number):
+        order = get_order(order_number)
+        return Response(OrderOutputSerializer(present_order(order)).data)
