@@ -15,7 +15,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")  # real environment variables always win over .env
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-insecure-key")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+# Safe by default: debug is OFF unless DJANGO_DEBUG=1 (set that in your private .env for development).
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
@@ -82,6 +83,14 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
+    # Every failure uses one shape: {"error": {"code", "message", "details"}}
+    "EXCEPTION_HANDLER": "common.exceptions.api_exception_handler",
+    # Lists return {"count", "next", "previous", "results"}; default 20 per page, max 100
+    "DEFAULT_PAGINATION_CLASS": "common.pagination.StandardPagination",
+    "PAGE_SIZE": 20,
+    # The API speaks JSON only
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
 }
 
 # ---- Assignment settings --------------------------------------------------------------
