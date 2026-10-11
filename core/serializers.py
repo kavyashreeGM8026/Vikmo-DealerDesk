@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from common.fields import StrictIntegerField
-from core.models import Product
+from core.models import Dealer, Product
 
 
 def validate_positive_money(value: Decimal):
@@ -97,3 +97,54 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 class InventoryUpdateSerializer(serializers.Serializer):
     quantity = StrictIntegerField(min_value=0)
     reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class NonNegativeMoneyField(MoneyField):
+    """Money that may be 0 (e.g. a credit limit). Same 2-decimal string format as MoneyField."""
+
+    def to_internal_value(self, data):
+        # Skip MoneyField's "must be > 0" rule by calling DecimalField directly.
+        # DecimalField already rejects more than 2 decimal places and non-numbers.
+        value = serializers.DecimalField.to_internal_value(self, data)
+        if value < 0:
+            raise serializers.ValidationError("Credit limit must not be negative.")
+        return value
+
+
+class DealerSerializer(serializers.ModelSerializer):
+    """Dealer in and out (contract section 6).
+
+    Required: dealer_code, name. Optional: city, phone, email, gstin, credit_limit.
+    `null` for an optional field is treated as "not given".
+    """
+
+    credit_limit = NonNegativeMoneyField(required=False, allow_null=True)
+
+    class Meta:
+        model = Dealer
+        fields = (
+            "id",
+            "dealer_code",
+            "name",
+            "city",
+            "phone",
+            "email",
+            "gstin",
+            "credit_limit",
+        )
+        extra_kwargs = {
+            # Uniqueness is a 409 DUPLICATE in the view, not a 400 validation error.
+            "dealer_code": {"validators": []},
+            "city": {"allow_null": True},
+            "phone": {"allow_null": True},
+            "email": {"allow_null": True},
+            "gstin": {"allow_null": True},
+        }
+
+    def validate(self, attrs):
+        for key in ("city", "phone", "email", "gstin"):
+            if key in attrs and attrs[key] is None:
+                attrs[key] = ""
+        if "credit_limit" in attrs and attrs["credit_limit"] is None:
+            del attrs["credit_limit"]  # fall back to the model default (0.00)
+        return attrs

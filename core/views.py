@@ -6,8 +6,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.exceptions import DuplicateError, NotFoundError
-from core.models import Product
+from core.models import Dealer, Product
 from core.serializers import (
+    DealerSerializer,
     InventoryUpdateSerializer,
     ProductCreateSerializer,
     ProductSerializer,
@@ -100,3 +101,42 @@ class InventoryUpdateView(APIView):
         product.stock = serializer.validated_data["quantity"]
         product.save(update_fields=["stock"])
         return Response({"sku": product.sku, "quantity": product.stock})
+
+
+class DealerListCreateView(generics.ListCreateAPIView):
+    """GET /api/dealers/ (paginated) and POST /api/dealers/ (contract section 6)."""
+
+    queryset = Dealer.objects.all()  # Dealer.Meta.ordering = ["id"] keeps pages stable
+    serializer_class = DealerSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data["dealer_code"]
+        if Dealer.objects.filter(dealer_code=code).exists():
+            raise DuplicateError(f"Dealer with code '{code}' already exists.")
+        try:
+            with transaction.atomic():
+                dealer = serializer.save()
+        except IntegrityError:
+            # Two identical requests raced past the exists() check; the DB unique index wins.
+            raise DuplicateError(f"Dealer with code '{code}' already exists.")
+        return Response(DealerSerializer(dealer).data, status=status.HTTP_201_CREATED)
+
+
+class DealerDetailView(generics.RetrieveAPIView):
+    """GET /api/dealers/{id}/. Only GET is in the contract."""
+
+    http_method_names = ["get", "head", "options"]
+    queryset = Dealer.objects.all()
+    serializer_class = DealerSerializer
+
+    def get_object(self):
+        raw_id = self.kwargs["pk"]
+        # Anything that is not a plain positive integer that fits the id column cannot exist.
+        if not (raw_id.isascii() and raw_id.isdigit()) or int(raw_id) > 2**63 - 1:
+            raise NotFoundError(f"Dealer '{raw_id}' not found.")
+        try:
+            return Dealer.objects.get(pk=int(raw_id))
+        except Dealer.DoesNotExist:
+            raise NotFoundError(f"Dealer '{raw_id}' not found.")
