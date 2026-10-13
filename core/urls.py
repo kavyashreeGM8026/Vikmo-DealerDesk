@@ -2,6 +2,7 @@ from django.urls import path
 from . import assistant_views
 
 from . import views
+from core.views_supplier import SupplierSyncView
 
 urlpatterns = [
     path("health/", views.health),
@@ -13,6 +14,7 @@ urlpatterns = [
     path("orders/", views.OrderListCreateView.as_view()),
     path("orders/<str:order_number>/", views.OrderDetailView.as_view()),
     path("assistant/chat/", assistant_views.AssistantChatView.as_view()),
+    path("sync/supplier/", SupplierSyncView.as_view()),
 ]
 
 
