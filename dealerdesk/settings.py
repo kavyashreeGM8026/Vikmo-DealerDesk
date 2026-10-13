@@ -101,3 +101,5 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 SUPPLIER_API_URL = os.environ.get("SUPPLIER_API_URL", "http://127.0.0.1:8099")
 SUPPLIER_API_KEY = os.environ.get("SUPPLIER_API_KEY", "")
+
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash-lite')

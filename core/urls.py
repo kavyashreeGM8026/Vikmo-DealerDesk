@@ -1,4 +1,5 @@
 from django.urls import path
+from . import assistant_views
 
 from . import views
 
@@ -11,6 +12,7 @@ urlpatterns = [
     path("dealers/<str:pk>/", views.DealerDetailView.as_view()),
     path("orders/", views.OrderListCreateView.as_view()),
     path("orders/<str:order_number>/", views.OrderDetailView.as_view()),
+    path("assistant/chat/", assistant_views.AssistantChatView.as_view()),
 ]
 
 
