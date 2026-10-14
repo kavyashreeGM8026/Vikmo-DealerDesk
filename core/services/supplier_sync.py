@@ -1,5 +1,6 @@
 
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import requests
@@ -12,6 +13,17 @@ from core.models import Product
 MAX_ATTEMPTS = 5
 PAGE_SIZE = 20
 MAX_PRICE = Decimal("9999999999.99")
+
+# Longest value each text column can hold (core/models.py). A longer value would make the
+# database raise and fail the whole sync, so such an item is rejected instead.
+MAX_SKU_LENGTH = 64
+TEXT_FIELDS = {
+    "name": 255,
+    "category": 128,
+    "brand": 128,
+    "vehicle_fitment": 255,
+    "description": None,  # TextField: no limit
+}
 
 
 class SupplierSyncError(Exception):
@@ -96,14 +108,35 @@ def _fetch_page(cursor, stats):
     raise SupplierSyncError("Supplier request failed.")
 
 
+def _updated_key(value):
+    """Sortable form of an `updated_at` string. Missing or unparsable counts as oldest."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return oldest
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return oldest
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _validate_item(item):
-    """Return (validated item, rejection reason)."""
+    """Return (validated item, rejection reason).
+
+    Per contract section 8.3 an item is invalid only when its `sku` is missing or empty or its
+    `price` is not a positive amount with at most 2 decimals. Two extra guards keep one bad row
+    from failing the whole sync: a value too long for its column is rejected, and a text field
+    that is absent or null is simply not part of the item (it is left unchanged on an existing
+    product and stored as empty on a new one).
+    """
     if not isinstance(item, dict):
         return None, "invalid item"
 
     sku = item.get("sku")
     if not isinstance(sku, str) or not sku.strip():
         return None, "missing sku"
+    if len(sku.strip()) > MAX_SKU_LENGTH:
+        return None, "sku too long"
 
     price_value = item.get("price")
     try:
@@ -117,31 +150,23 @@ def _validate_item(item):
     if price.as_tuple().exponent < -2:
         return None, "invalid price"
 
-    updated_at = item.get("updated_at")
-    if not isinstance(updated_at, str) or not updated_at.strip():
-        return None, "missing updated_at"
-
-    required_text_fields = (
-        "name",
-        "category",
-        "brand",
-        "vehicle_fitment",
-        "description",
-    )
-    for field in required_text_fields:
-        if not isinstance(item.get(field), str):
-            return None, f"invalid {field}"
-
-    return {
+    valid = {
         "sku": sku.strip(),
-        "name": item["name"],
-        "category": item["category"],
-        "brand": item["brand"],
-        "vehicle_fitment": item["vehicle_fitment"],
-        "description": item["description"],
         "price": price,
-        "updated_at": updated_at,
-    }, None
+        "updated_at": item.get("updated_at"),
+        "fields": {},
+    }
+    for field, max_length in TEXT_FIELDS.items():
+        value = item.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            value = str(value)
+        if max_length is not None and len(value) > max_length:
+            return None, f"{field} too long"
+        valid["fields"][field] = value
+
+    return valid, None
 
 
 def sync_supplier_catalogue():
@@ -199,7 +224,7 @@ def sync_supplier_catalogue():
         sku = valid["sku"]
         previous = latest_by_sku.get(sku)
 
-        if previous is None or valid["updated_at"] > previous["updated_at"]:
+        if previous is None or _updated_key(valid["updated_at"]) > _updated_key(previous["updated_at"]):
             latest_by_sku[sku] = valid
 
     # No database writes occur until all pages have been fetched and validated.
@@ -217,11 +242,11 @@ def sync_supplier_catalogue():
             if product is None:
                 Product.objects.create(
                     sku=sku,
-                    name=item["name"],
-                    category=item["category"],
-                    brand=item["brand"],
-                    vehicle_fitment=item["vehicle_fitment"],
-                    description=item["description"],
+                    name=item["fields"].get("name", ""),
+                    category=item["fields"].get("category", ""),
+                    brand=item["fields"].get("brand", ""),
+                    vehicle_fitment=item["fields"].get("vehicle_fitment", ""),
+                    description=item["fields"].get("description", ""),
                     price=item["price"],
                     stock=0,
                 )
@@ -230,16 +255,10 @@ def sync_supplier_catalogue():
 
             changed_fields = []
 
-            for field in (
-                "name",
-                "category",
-                "brand",
-                "vehicle_fitment",
-                "description",
-                "price",
-            ):
-                if getattr(product, field) != item[field]:
-                    setattr(product, field, item[field])
+            new_values = {**item["fields"], "price": item["price"]}
+            for field, value in new_values.items():
+                if getattr(product, field) != value:
+                    setattr(product, field, value)
                     changed_fields.append(field)
 
             if changed_fields:

@@ -6,3 +6,8 @@ python-dotenv>=1.0
 requests>=2.31
 google-genai>=2.26,<3.0
 # Add your LLM provider's SDK if you use one, e.g. google-genai, openai, anthropic or groq
+
+
+# Dependencies for ml/forecast.py
+numpy>=1.26,<3
+pandas>=2.2,<4
