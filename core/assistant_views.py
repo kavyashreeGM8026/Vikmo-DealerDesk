@@ -2,8 +2,6 @@
 """HTTP endpoint for the DealerDesk AI assistant."""
 
 import logging
-import threading
-from collections import OrderedDict
 
 from django.conf import settings
 from rest_framework import serializers, status
@@ -12,7 +10,13 @@ from rest_framework.views import APIView
 
 from common.exceptions import error_response
 from core.models import Dealer
+from core.services.assistant.history import trim_history
 from core.services.assistant.llm import run_assistant
+from core.services.assistant.sessions import (
+    SessionBusy,
+    SessionDealerMismatch,
+    SessionStore,
+)
 from core.services.assistant.tools import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -21,8 +25,7 @@ MAX_SESSIONS = 500
 MAX_HISTORY_MESSAGES = 24
 
 # In-memory history, isolated by session ID. Suitable for a single app process.
-_sessions = OrderedDict()
-_sessions_lock = threading.RLock()
+session_store = SessionStore(max_sessions=MAX_SESSIONS)
 
 
 class AssistantChatSerializer(serializers.Serializer):
@@ -63,50 +66,41 @@ class AssistantChatView(APIView):
                 "The assistant is not configured.",
             )
 
-        # Keep a session bound to its original dealer and serialize turns within
-        # a session so concurrent requests cannot corrupt its conversation order.
-        with _sessions_lock:
-            session = _sessions.get(session_id)
-
-            if session and session["dealer_id"] != dealer_id:
-                return error_response(
-                    status.HTTP_400_BAD_REQUEST,
-                    "VALIDATION_ERROR",
-                    "This session belongs to a different dealer.",
-                    [{
-                        "field": "session_id",
-                        "message": "This session is already bound to a different dealer.",
-                    }],
-                )
-
-            history = list(session["history"]) if session else []
-
-            context = ToolContext(dealer=dealer)
-
-            try:
-                result = run_assistant(
-                    message=message,
-                    context=context,
-                    history=history,
-                )
-            except Exception:
-                logger.exception("Assistant chat failed for session %s", session_id)
-                return error_response(
-                    status.HTTP_502_BAD_GATEWAY,
-                    "ASSISTANT_UNAVAILABLE",
-                    "The assistant could not complete the request. Please try again.",
-                )
-
-            new_history = result["history"][-MAX_HISTORY_MESSAGES:]
-
-            _sessions[session_id] = {
-                "dealer_id": dealer_id,
-                "history": new_history,
-            }
-            _sessions.move_to_end(session_id)
-
-            while len(_sessions) > MAX_SESSIONS:
-                _sessions.popitem(last=False)
+        # The session is bound to its first dealer. Requests for the same session run one
+        # after the other; other sessions are never blocked while this one waits for the LLM.
+        context = ToolContext(dealer=dealer)
+        try:
+            with session_store.open(session_id, dealer_id) as session:
+                try:
+                    result = run_assistant(
+                        message=message,
+                        context=context,
+                        history=list(session.history),
+                    )
+                except Exception:
+                    logger.exception("Assistant chat failed for session %s", session_id)
+                    return error_response(
+                        status.HTTP_502_BAD_GATEWAY,
+                        "ASSISTANT_UNAVAILABLE",
+                        "The assistant could not complete the request. Please try again.",
+                    )
+                session.commit(trim_history(result["history"], MAX_HISTORY_MESSAGES))
+        except SessionDealerMismatch:
+            return error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "VALIDATION_ERROR",
+                "This session belongs to a different dealer.",
+                [{
+                    "field": "session_id",
+                    "message": "This session is already bound to a different dealer.",
+                }],
+            )
+        except SessionBusy:
+            return error_response(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "ASSISTANT_BUSY",
+                "Another request for this session is still running. Please try again.",
+            )
 
         tool_calls = result.get("tool_calls", [])
         tool_results = result.get("tool_results", [])
