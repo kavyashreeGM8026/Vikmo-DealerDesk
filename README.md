@@ -1,41 +1,132 @@
-# DealerDesk starter
 
-A minimal Django project that already follows the run contract. It has **no models and no business logic**: designing those is the assignment.
 
-What's here:
+# VIKMO DealerDesk — AI/ML Track
 
-- `dealerdesk/settings.py` reads `DATABASE_URL`, `SUPPLIER_API_URL`, `SUPPLIER_API_KEY` and the LLM keys (Gemini, OpenAI, Anthropic, Groq), refuses anything but PostgreSQL, and turns off authentication for the API.
-- `GET /api/health/` returns `{"status": "ok"}`.
-- `python manage.py seed_data` exists but does nothing yet.
-- `requirements.txt` with Django, DRF, the Postgres driver and `requests`. Add your LLM provider's SDK if you build the assistant.
+## Overview
 
-## Set up
+DealerDesk is a Django REST API for a vehicle-parts distributor. This submission implements the catalogue/dealer/order backend, PostgreSQL-backed order and pricing logic, supplier catalogue synchronization, a Gemini-powered dealer assistant with database-backed tools, and a four-week demand forecast with reorder suggestions.
 
-1. Copy everything in this folder into the root of your repo, next to `data/`.
-2. Get a PostgreSQL database:
-   - **Hosted, free:** create a project on neon.tech or supabase.com and copy its connection string, or
-   - **Local:** install PostgreSQL and run `createdb dealerdesk`.
-3. Copy `.env.example` to `.env` and fill in `DATABASE_URL` (and your LLM key if you build the assistant).
-4. Install and run:
+### Implemented areas
 
-```bash
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python manage.py migrate
+- Product catalogue, inventory, dealers, and draft orders through the REST API.
+- Order pricing with `Decimal` and per-line GST rounding.
+- PostgreSQL order-number allocation and transactional order workflows.
+- Supplier catalogue pagination, retries, validation, and atomic reconciliation.
+- Gemini tool-calling assistant for product search, live stock checks, and draft-order creation.
+- Four-week forecasts for 40 SKUs and reorder suggestions using forecast demand, lead times, and safety stock.
+
+No frontend is included. The API is configured without authentication for the assignment contract; do not expose it publicly as a production service without adding appropriate authentication and deployment hardening.
+
+## Requirements
+
+- Python 3.11+
+- PostgreSQL
+- A Gemini API key for assistant responses
+- Supplier API URL and API key (the assignment's mock supplier can be used locally)
+
+## Environment configuration
+
+Create a private `.env` file in the repository root from `.env.example`. Do not commit `.env` or real credentials.
+
+Set these variables:
+
+```dotenv
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE
+SUPPLIER_API_URL=http://127.0.0.1:8099
+SUPPLIER_API_KEY=your-supplier-key
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-3.5-flash-lite
+DJANGO_SECRET_KEY=replace-with-a-private-secret
+```
+
+The database URL must point to PostgreSQL. SQLite is deliberately rejected because order concurrency requirements depend on PostgreSQL behavior. If your password contains URL-reserved characters, percent-encode them in the connection URL.
+
+## Local setup
+
+### Windows PowerShell
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env with your local PostgreSQL URL and keys
+python manage.py migrate --noinput
+python manage.py seed_data
 python manage.py seed_data
 python manage.py runserver 0.0.0.0:8000
 ```
 
-5. Check it: `curl http://localhost:8000/api/health/` → `{"status": "ok"}`
-
-## Before you submit
-
-Reset to a fresh database, seed twice, and run the smoke test from the bundle:
+### macOS/Linux
 
 ```bash
-python smoke_test.py --base-url http://localhost:8000 --track django   # or --track aiml
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your PostgreSQL URL and keys
+python manage.py migrate --noinput
+python manage.py seed_data
+python manage.py seed_data
+python manage.py runserver 0.0.0.0:8000
 ```
 
-Add new packages to `requirements.txt` as you go. The grader installs it on Linux with Python 3.11+.
+`seed_data` is designed to be safe to run repeatedly. The second run should not create duplicate catalogue products or dealers.
 
-Docker is optional. If you add a `Dockerfile` or `docker-compose.yml` for yourself, keep the plain commands above working too: the grader uses those, not Docker.
+## Supplier mock
+
+In a separate terminal, run:
+
+```bash
+python supplier_mock/mock_supplier.py
+```
+
+Use the URL and API key printed by the mock to configure `SUPPLIER_API_URL` and `SUPPLIER_API_KEY`. The mock's outage mode can be used to exercise failure handling:
+
+```bash
+python supplier_mock/mock_supplier.py --outage
+```
+
+## Tests and smoke test
+
+Run the automated test suite:
+
+```bash
+python manage.py test common core
+```
+
+Run the bundled smoke test against a freshly migrated and seeded database:
+
+```bash
+python smoke_test.py --base-url http://localhost:8000 --track aiml
+```
+
+The smoke test creates a test order, so use a disposable test database. The `aiml` track is selected because this submission includes the dealer assistant and forecasting. For an AI assistant request, configure a valid `GEMINI_API_KEY`; without a key, assistant calls intentionally report that the assistant is not configured.
+
+Forecast generation and backtesting:
+
+```bash
+python ml/forecast.py
+```
+
+The committed `ml/forecast.csv` contains 160 forecast rows (40 SKUs × 4 weeks).
+
+## LLM
+
+- Provider: Google Gemini
+- SDK: `google-genai`
+- Default model: `gemini-3.5-flash-lite` (overridable with `GEMINI_MODEL`)
+
+The assistant uses tool calling; catalogue and stock facts are retrieved from the database tools rather than relying on model memory.
+
+## Assumptions and limitations
+
+- PostgreSQL is required; SQLite is unsupported.
+- The API uses the assignment's unauthenticated API configuration and is intended for evaluation/local use.
+- The assistant depends on a configured Gemini API key and network access to the provider.
+- Forecasts are generated from the supplied sales, promotion, lead-time, and festival-calendar CSV files. Forecast quality can be weaker for intermittent/new SKUs and unusual demand changes.
+- No video walkthrough link has been added yet. Add an unlisted walkthrough URL here before submission if you record one.
+
+## Video walkthrough
+
+https://drive.google.com/file/d/1-dD3K0_JtpaBv6-mpZrodp9sQieFFybP/view?usp=sharing
