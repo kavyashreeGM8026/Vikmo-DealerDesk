@@ -10,6 +10,7 @@ from rest_framework import serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.exceptions import error_response
 from core.models import Dealer
 from core.services.assistant.llm import run_assistant
 from core.services.assistant.tools import ToolContext
@@ -48,15 +49,18 @@ class AssistantChatView(APIView):
         try:
             dealer = Dealer.objects.get(pk=dealer_id)
         except Dealer.DoesNotExist:
-            return Response(
-                {"detail": "Dealer not found."},
-                status=status.HTTP_404_NOT_FOUND,
+            return error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "VALIDATION_ERROR",
+                "Unknown dealer.",
+                [{"field": "dealer_id", "message": "No dealer with this id exists."}],
             )
 
         if not getattr(settings, "GEMINI_API_KEY", ""):
-            return Response(
-                {"detail": "The assistant is not configured."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            return error_response(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ASSISTANT_NOT_CONFIGURED",
+                "The assistant is not configured.",
             )
 
         # Keep a session bound to its original dealer and serialize turns within
@@ -65,9 +69,14 @@ class AssistantChatView(APIView):
             session = _sessions.get(session_id)
 
             if session and session["dealer_id"] != dealer_id:
-                return Response(
-                    {"detail": "This session belongs to a different dealer."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                return error_response(
+                    status.HTTP_400_BAD_REQUEST,
+                    "VALIDATION_ERROR",
+                    "This session belongs to a different dealer.",
+                    [{
+                        "field": "session_id",
+                        "message": "This session is already bound to a different dealer.",
+                    }],
                 )
 
             history = list(session["history"]) if session else []
@@ -82,9 +91,10 @@ class AssistantChatView(APIView):
                 )
             except Exception:
                 logger.exception("Assistant chat failed for session %s", session_id)
-                return Response(
-                    {"detail": "The assistant could not complete the request. Please try again."},
-                    status=status.HTTP_502_BAD_GATEWAY,
+                return error_response(
+                    status.HTTP_502_BAD_GATEWAY,
+                    "ASSISTANT_UNAVAILABLE",
+                    "The assistant could not complete the request. Please try again.",
                 )
 
             new_history = result["history"][-MAX_HISTORY_MESSAGES:]
