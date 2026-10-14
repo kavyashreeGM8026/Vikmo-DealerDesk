@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from common.exceptions import error_response
 from core.models import Dealer
+from core.services.assistant.citations import extract_cited_skus
 from core.services.assistant.history import trim_history
 from core.services.assistant.llm import run_assistant
 from core.services.assistant.sessions import (
@@ -104,35 +105,7 @@ class AssistantChatView(APIView):
 
         tool_calls = result.get("tool_calls", [])
         tool_results = result.get("tool_results", [])
-        cited_skus = []
-
-        def add_sku(value):
-            if isinstance(value, str) and value and value not in cited_skus:
-                cited_skus.append(value)
-
-        for tool_result in tool_results:
-            name = tool_result.get("name")
-            result_data = tool_result.get("result", {})
-
-            if not isinstance(result_data, dict):
-                continue
-
-            if name == "search_parts":
-                for product in result_data.get("products", []):
-                    if isinstance(product, dict):
-                        add_sku(product.get("sku"))
-
-            elif name == "check_stock":
-                if result_data.get("found"):
-                    add_sku(result_data.get("sku"))
-
-            elif name == "create_draft_order":
-                order = result_data.get("order", result_data)
-                if isinstance(order, dict):
-                    add_sku(order.get("sku"))
-                    for item in order.get("items", []):
-                        if isinstance(item, dict):
-                            add_sku(item.get("sku"))
+        cited_skus = extract_cited_skus(result["reply"], tool_results, result.get("history"))
 
         actions = [
             {
